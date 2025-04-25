@@ -3,39 +3,37 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import os
-import datetime
 
 # ─── Helper Functions ───────────────────────────────────────────────────────────
 
 @st.cache_data
 def load_sp500_tickers():
-    table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
+    table = pd.read_html(
+        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    )[0]
     return table["Symbol"].tolist()
 
 @st.cache_data
 def get_stock_data(ticker, start_date="2020-01-01"):
     df = yf.Ticker(ticker).history(start=start_date)
-    if df.empty:
-        raise ValueError(f"No data found for {ticker}")
     df["20EMA"] = df["Close"].ewm(span=20, adjust=False).mean()
     df["50EMA"] = df["Close"].ewm(span=50, adjust=False).mean()
-    df["RSI"] = compute_rsi(df["Close"])
+    df["RSI"]   = compute_rsi(df["Close"])
     df["MACD"], df["Signal"] = compute_macd(df["Close"])
     return df
 
 def compute_rsi(series, period=14):
     delta = series.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta).clip(lower=0).rolling(period).mean()
-    rs = gain / loss
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta).clip(lower=0).rolling(period).mean()
+    rs    = gain / loss
     return 100 - (100 / (1 + rs))
 
 def compute_macd(series, short=12, long=26, signal=9):
     short_ema = series.ewm(span=short, adjust=False).mean()
-    long_ema = series.ewm(span=long, adjust=False).mean()
-    macd = short_ema - long_ema
-    sig_line = macd.ewm(span=signal, adjust=False).mean()
+    long_ema  = series.ewm(span=long,  adjust=False).mean()
+    macd      = short_ema - long_ema
+    sig_line  = macd.ewm(span=signal, adjust=False).mean()
     return macd, sig_line
 
 def check_buy_signal(df):
@@ -48,120 +46,94 @@ def check_buy_signal(df):
 
 # ─── Streamlit UI ───────────────────────────────────────────────────────────────
 
-st.title("📈 Momentum Screener with History & Alerts")
+st.title("🔍 Momentum Screener: Top-N Stocks")
 
-top_n = st.selectbox("How many top momentum stocks?", options=[5, 10, 20, 50, 100], index=2)
+# 1. Select how many top stocks to show
+top_n = st.selectbox(
+    "How many top momentum stocks?",
+    options=[5, 10, 20, 50, 100],
+    index=2,
+)
 
+# 2. Button to run full screen
 if st.button("🏁 Run Screener"):
-    with st.spinner("Fetching S&P 500 tickers…"):
+    with st.spinner("Fetching S&P 500 list…"):
         tickers = load_sp500_tickers()
 
     results = []
     for sym in tickers:
-        try:
-            df = get_stock_data(sym, start_date="2023-01-01")
-            if len(df) < 50:
-                continue
-
-            # Filter low-volume stocks
-            avg_volume = df["Volume"].rolling(20).mean().iloc[-1]
-            if avg_volume < 1_000_000:
-                continue
-
-            if check_buy_signal(df):
-                one_month_ago = df["Close"].iloc[-21]
-                latest_price = df["Close"].iloc[-1]
-                ret = (latest_price / one_month_ago) - 1
-                vol = df["Close"].iloc[-21:].std()
-                score = ret / vol if vol > 0 else 0
-                results.append((sym, score, ret, df))
-        except Exception:
+        df = get_stock_data(sym, start_date="2023-01-01")
+        if len(df) < 50:
             continue
+        if check_buy_signal(df):
+            one_month_ago = df["Close"].iloc[-21]
+            latest_price  = df["Close"].iloc[-1]
+            ret           = (latest_price / one_month_ago) - 1
+            results.append((sym, ret, df))
 
     res_df = pd.DataFrame(
-        [(s, sc, r) for s, sc, r, _ in results],
-        columns=["Ticker", "Momentum Score", "1-Mo Return"]
-    ).sort_values("Momentum Score", ascending=False).reset_index(drop=True)
+        [(s, r) for s, r, _ in results],
+        columns=["Ticker", "1-Mo Return"]
+    ).sort_values("1-Mo Return", ascending=False).reset_index(drop=True)
 
-    top_df = res_df.head(top_n)
     st.subheader(f"Top {top_n} Momentum Stocks")
-    st.dataframe(top_df.style.format({"Momentum Score": "{:.2f}", "1-Mo Return": "{:.2%}"}))
+    top_df = res_df.head(top_n)
+    st.dataframe(top_df.style.format({"1-Mo Return": "{:.2%}"}))
 
-    # Save for today/yesterday
-    today_csv = "top_stocks_today.csv"
-    yesterday_csv = "top_stocks_yesterday.csv"
-
-    if os.path.exists(today_csv):
-        os.replace(today_csv, yesterday_csv)
-    top_df.to_csv(today_csv, index=False)
-
-    # Download buttons
-    st.download_button("📥 Download Today's List", top_df.to_csv(index=False), file_name=f"momentum_today_{datetime.date.today()}.csv")
-    if os.path.exists(yesterday_csv):
-        with open(yesterday_csv, "r") as f:
-            st.download_button("📥 Download Yesterday's List", f, file_name="momentum_yesterday.csv")
-
-    # Compare with yesterday
-    if os.path.exists(yesterday_csv):
-        if st.button("🔁 Compare with Yesterday"):
-            y_df = pd.read_csv(yesterday_csv)
-            y_set = set(y_df["Ticker"])
-            t_set = set(top_df["Ticker"])
-
-            new_entries = sorted(t_set - y_set)
-            dropped = sorted(y_set - t_set)
-            unchanged = sorted(y_set & t_set)
-
-            st.markdown("✅ **New Today**")
-            st.write(new_entries if new_entries else "None")
-
-            st.markdown("❌ **Dropped Since Yesterday**")
-            st.write(dropped if dropped else "None")
-
-            st.markdown("↔️ **Unchanged**")
-            st.write(unchanged if unchanged else "None")
-
-    # Optional: Slack/Email Alerts (placeholder)
-    if st.checkbox("Send alerts via Slack (placeholder)"):
-        st.info("🔔 Slack alert would be sent here (integrate with webhook).")
-
-    # Detailed view
-    sel = st.selectbox("📊 View Chart For:", options=top_df["Ticker"].tolist())
+    sel = st.selectbox(
+        "Pick a ticker for detailed view",
+        options=top_df["Ticker"].tolist()
+    )
     if sel:
-        df_sel = next(df for s, _, _, df in results if s == sel)
-        st.markdown(f"### Chart: **{sel}**")
+        df_sel = next(df for s, _, df in results if s == sel)
+        st.markdown(f"### Detailed View: **{sel}**")
+
         fig, ax = plt.subplots()
         ax.plot(df_sel.index, df_sel["Close"], label="Close")
-        ax.plot(df_sel.index, df_sel["20EMA"], label="20EMA", linestyle="--")
-        ax.plot(df_sel.index, df_sel["50EMA"], label="50EMA", linestyle="--")
+        ax.plot(df_sel.index, df_sel["20EMA"], label="20-day EMA", linestyle="--")
+        ax.plot(df_sel.index, df_sel["50EMA"], label="50-day EMA", linestyle="--")
         ax.legend()
         st.pyplot(fig)
 
         fig2, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 5), sharex=True)
-        ax1.plot(df_sel.index, df_sel["RSI"])
+        ax1.plot(df_sel.index, df_sel["RSI"], label="RSI")
         ax1.axhline(70, color="red", linestyle="--")
         ax1.axhline(30, color="green", linestyle="--")
         ax1.set_ylabel("RSI")
+        ax1.legend()
 
         ax2.plot(df_sel.index, df_sel["MACD"], label="MACD")
         ax2.plot(df_sel.index, df_sel["Signal"], label="Signal")
         ax2.axhline(0, color="black", linestyle="--")
         ax2.set_ylabel("MACD")
         ax2.legend()
+
         st.pyplot(fig2)
 
-# ─── Individual Stock Search ─────────────────────────────────────────────────────
+# ─── Individual Stock Search with Explanation ────────────────────────────────────
 
 st.divider()
-st.subheader("🔎 Check Signal for Any Stock")
+st.subheader("🔎 Check Signal for Any Stock (with Explanation)")
 
 user_ticker = st.text_input("Enter stock ticker (e.g., MSFT):")
 if st.button("🔍 Check Ticker"):
     if user_ticker:
         try:
             df = get_stock_data(user_ticker.upper(), start_date="2023-01-01")
-            signal = check_buy_signal(df)
-            st.success(f"Buy Signal for {user_ticker.upper()}: {'✅ YES' if signal else '❌ NO'}")
+            latest = df.iloc[-1]
+
+            ema_pass = latest["20EMA"] > latest["50EMA"]
+            rsi = latest["RSI"]
+            rsi_pass = 50 <= rsi <= 70
+            macd_pass = latest["MACD"] > latest["Signal"]
+
+            is_buy = ema_pass and rsi_pass and macd_pass
+            st.success(f"Buy Signal for {user_ticker.upper()}: {'✅ YES' if is_buy else '❌ NO'}")
+
+            st.markdown("### \ud83d\udccb Signal Breakdown")
+            st.markdown(f"- {'✅' if ema_pass else '❌'} 20EMA > 50EMA (20EMA = {latest['20EMA']:.2f}, 50EMA = {latest['50EMA']:.2f})")
+            st.markdown(f"- {'✅' if rsi_pass else '❌'} RSI = {rsi:.2f} (should be between 50 and 70)")
+            st.markdown(f"- {'✅' if macd_pass else '❌'} MACD = {latest['MACD']:.2f}, Signal = {latest['Signal']:.2f}")
 
             fig, ax = plt.subplots()
             ax.plot(df.index, df["Close"], label="Close")
