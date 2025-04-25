@@ -1,7 +1,7 @@
-streamlit>=1.32
-yfinance>=0.2
-pandas>=2.0
-numpy>=1.24
-matplotlib>=3.7
-lxml>=4.9
+streamlit
+yfinance
+pandas
+numpy
+matplotlib
+lxml
 
