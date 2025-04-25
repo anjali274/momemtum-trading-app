@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 # ─── Helper Functions ───────────────────────────────────────────────────────────
 
-@st.cache
+@st.cache_data
 def load_sp500_tickers():
     # scrape S&P 500 tickers from Wikipedia
     table = pd.read_html(
@@ -14,7 +14,7 @@ def load_sp500_tickers():
     )[0]
     return table["Symbol"].tolist()
 
-@st.cache
+@st.cache_data
 def get_stock_data(ticker, start_date="2020-01-01"):
     try:
         # Fetch stock data using yfinance
