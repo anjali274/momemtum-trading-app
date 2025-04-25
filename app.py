@@ -3,18 +3,18 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import concurrent.futures
 
 # ─── Helper Functions ───────────────────────────────────────────────────────────
 
 @st.cache_data
 def load_sp500_tickers():
-    # scrape S&P 500 tickers from Wikipedia
     table = pd.read_html(
         "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     )[0]
     return table["Symbol"].tolist()
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def get_stock_data(ticker, start_date="2020-01-01"):
     df = yf.Ticker(ticker).history(start=start_date)
     df["20EMA"] = df["Close"].ewm(span=20, adjust=False).mean()
@@ -45,35 +45,42 @@ def check_buy_signal(df):
         (latest["MACD"] > latest["Signal"])
     )
 
+def process_ticker(sym):
+    try:
+        df = get_stock_data(sym, start_date="2023-01-01")
+        if len(df) < 50:
+            return None
+        if check_buy_signal(df):
+            one_month_ago = df["Close"].iloc[-21]
+            latest_price  = df["Close"].iloc[-1]
+            ret           = (latest_price / one_month_ago) - 1
+            return (sym, ret, df)
+    except Exception:
+        return None
+    return None
+
 # ─── Streamlit UI ───────────────────────────────────────────────────────────────
 
 st.title("🔍 Momentum Screener: Top-N Stocks")
 
-# 1. Select how many top stocks to show
 top_n = st.selectbox(
     "How many top momentum stocks?",
     options=[5, 10, 20, 50, 100],
     index=2,
 )
 
-# 2. Button to run full screen
 if st.button("🏁 Run Screener"):
     with st.spinner("Fetching S&P 500 list…"):
         tickers = load_sp500_tickers()
 
-    results = []
-    for sym in tickers:
-        df = get_stock_data(sym, start_date="2023-01-01")
-        if len(df) < 50:
-            continue
-        if check_buy_signal(df):
-            # compute 1-month return as a simple momentum score
-            one_month_ago = df["Close"].iloc[-21]
-            latest_price  = df["Close"].iloc[-1]
-            ret           = (latest_price / one_month_ago) - 1
-            results.append((sym, ret, df))
+    with st.spinner("Processing stock data…"):
+        # Optional: limit number of tickers during development
+        # tickers = tickers[:100]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            results = list(executor.map(process_ticker, tickers))
 
-    # create DataFrame of results & pick top-N by return
+        results = [r for r in results if r]
+
     res_df = pd.DataFrame(
         [(s, r) for s, r, _ in results],
         columns=["Ticker", "1-Mo Return"]
@@ -83,7 +90,6 @@ if st.button("🏁 Run Screener"):
     top_df = res_df.head(top_n)
     st.dataframe(top_df.style.format({"1-Mo Return": "{:.2%}"}))
 
-    # 3. Detailed view
     sel = st.selectbox(
         "Pick a ticker for detailed view",
         options=top_df["Ticker"].tolist()
@@ -92,7 +98,6 @@ if st.button("🏁 Run Screener"):
         df_sel = next(df for s, _, df in results if s == sel)
         st.markdown(f"### Detailed View: **{sel}**")
 
-        # plot price + EMAs
         fig, ax = plt.subplots()
         ax.plot(df_sel.index, df_sel["Close"], label="Close")
         ax.plot(df_sel.index, df_sel["20EMA"], label="20-day EMA", linestyle="--")
@@ -100,7 +105,6 @@ if st.button("🏁 Run Screener"):
         ax.legend()
         st.pyplot(fig)
 
-        # RSI & MACD
         fig2, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 5), sharex=True)
         ax1.plot(df_sel.index, df_sel["RSI"], label="RSI")
         ax1.axhline(70, color="red", linestyle="--")
