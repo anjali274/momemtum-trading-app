@@ -92,4 +92,83 @@ if st.button("🏁 Run Screener"):
     yesterday_csv = "top_stocks_yesterday.csv"
 
     if os.path.exists(today_csv):
-        os.replace(today_csv_
+        os.replace(today_csv, yesterday_csv)
+    top_df.to_csv(today_csv, index=False)
+
+    # Download buttons
+    st.download_button("📥 Download Today's List", top_df.to_csv(index=False), file_name=f"momentum_today_{datetime.date.today()}.csv")
+    if os.path.exists(yesterday_csv):
+        with open(yesterday_csv, "r") as f:
+            st.download_button("📥 Download Yesterday's List", f, file_name="momentum_yesterday.csv")
+
+    # Compare with yesterday
+    if os.path.exists(yesterday_csv):
+        if st.button("🔁 Compare with Yesterday"):
+            y_df = pd.read_csv(yesterday_csv)
+            y_set = set(y_df["Ticker"])
+            t_set = set(top_df["Ticker"])
+
+            new_entries = sorted(t_set - y_set)
+            dropped = sorted(y_set - t_set)
+            unchanged = sorted(y_set & t_set)
+
+            st.markdown("✅ **New Today**")
+            st.write(new_entries if new_entries else "None")
+
+            st.markdown("❌ **Dropped Since Yesterday**")
+            st.write(dropped if dropped else "None")
+
+            st.markdown("↔️ **Unchanged**")
+            st.write(unchanged if unchanged else "None")
+
+    # Optional: Slack/Email Alerts (placeholder)
+    if st.checkbox("Send alerts via Slack (placeholder)"):
+        st.info("🔔 Slack alert would be sent here (integrate with webhook).")
+
+    # Detailed view
+    sel = st.selectbox("📊 View Chart For:", options=top_df["Ticker"].tolist())
+    if sel:
+        df_sel = next(df for s, _, _, df in results if s == sel)
+        st.markdown(f"### Chart: **{sel}**")
+        fig, ax = plt.subplots()
+        ax.plot(df_sel.index, df_sel["Close"], label="Close")
+        ax.plot(df_sel.index, df_sel["20EMA"], label="20EMA", linestyle="--")
+        ax.plot(df_sel.index, df_sel["50EMA"], label="50EMA", linestyle="--")
+        ax.legend()
+        st.pyplot(fig)
+
+        fig2, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 5), sharex=True)
+        ax1.plot(df_sel.index, df_sel["RSI"])
+        ax1.axhline(70, color="red", linestyle="--")
+        ax1.axhline(30, color="green", linestyle="--")
+        ax1.set_ylabel("RSI")
+
+        ax2.plot(df_sel.index, df_sel["MACD"], label="MACD")
+        ax2.plot(df_sel.index, df_sel["Signal"], label="Signal")
+        ax2.axhline(0, color="black", linestyle="--")
+        ax2.set_ylabel("MACD")
+        ax2.legend()
+        st.pyplot(fig2)
+
+# ─── Individual Stock Search ─────────────────────────────────────────────────────
+
+st.divider()
+st.subheader("🔎 Check Signal for Any Stock")
+
+user_ticker = st.text_input("Enter stock ticker (e.g., MSFT):")
+if st.button("🔍 Check Ticker"):
+    if user_ticker:
+        try:
+            df = get_stock_data(user_ticker.upper(), start_date="2023-01-01")
+            signal = check_buy_signal(df)
+            st.success(f"Buy Signal for {user_ticker.upper()}: {'✅ YES' if signal else '❌ NO'}")
+
+            fig, ax = plt.subplots()
+            ax.plot(df.index, df["Close"], label="Close")
+            ax.plot(df.index, df["20EMA"], label="20EMA", linestyle="--")
+            ax.plot(df.index, df["50EMA"], label="50EMA", linestyle="--")
+            ax.legend()
+            st.pyplot(fig)
+
+        except Exception as e:
+            st.error(f"Couldn't fetch {user_ticker.upper()}: {e}")
