@@ -45,11 +45,30 @@ def compute_macd(series, short=12, long=26, signal=9):
 
 def check_buy_signal(df):
     latest = df.iloc[-1]
-    return (
+    buy_signal = (
         (latest["20EMA"] > latest["50EMA"]) and
         (50 <= latest["RSI"] <= 70) and
         (latest["MACD"] > latest["Signal"])
     )
+    
+    # Reasoning for Buy or Not a Buy
+    reason = ""
+    if latest["20EMA"] > latest["50EMA"]:
+        reason += "✔️ 20EMA is above 50EMA. "
+    else:
+        reason += "❌ 20EMA is below 50EMA. "
+
+    if 50 <= latest["RSI"] <= 70:
+        reason += "✔️ RSI is between 50 and 70. "
+    else:
+        reason += "❌ RSI is not between 50 and 70. "
+
+    if latest["MACD"] > latest["Signal"]:
+        reason += "✔️ MACD is above the Signal line. "
+    else:
+        reason += "❌ MACD is below the Signal line. "
+
+    return buy_signal, reason
 
 def get_stock_name(ticker):
     try:
@@ -78,18 +97,18 @@ if st.button("🏁 Run Screener"):
         df = get_stock_data(sym, start_date="2023-01-01")
         if len(df) < 50:
             continue
-        if check_buy_signal(df):
-            # compute 1-month return as a simple momentum score
-            one_month_ago = df["Close"].iloc[-21]
-            latest_price  = df["Close"].iloc[-1]
-            ret           = (latest_price / one_month_ago) - 1
-            stock_name = get_stock_name(sym)  # Get stock name
-            results.append((stock_name, sym, ret, df))
+        buy_signal, reason = check_buy_signal(df)
+        # compute 1-month return as a simple momentum score
+        one_month_ago = df["Close"].iloc[-21]
+        latest_price  = df["Close"].iloc[-1]
+        ret           = (latest_price / one_month_ago) - 1
+        stock_name = get_stock_name(sym)  # Get stock name
+        results.append((stock_name, sym, ret, buy_signal, reason, df))
 
     # create DataFrame of results & pick top-N by return
     res_df = pd.DataFrame(
-        [(name, sym, r) for name, sym, r, _ in results],
-        columns=["Stock Name", "Ticker", "1-Mo Return"]
+        [(name, sym, r, bs, reason) for name, sym, r, bs, reason, _ in results],
+        columns=["Stock Name", "Ticker", "1-Mo Return", "Buy Signal", "Reason"]
     ).sort_values("1-Mo Return", ascending=False).reset_index(drop=True)
 
     st.subheader(f"Top {top_n} Momentum Stocks")
@@ -102,7 +121,7 @@ if st.button("🏁 Run Screener"):
         options=top_df["Ticker"].tolist()
     )
     if sel:
-        df_sel = next(df for _, s, _, df in results if s == sel)
+        df_sel = next(df for _, s, _, _, _, df in results if s == sel)
         st.markdown(f"### Detailed View: **{sel}**")
 
         # plot price + EMAs
