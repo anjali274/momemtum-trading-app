@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
 
 # ─── Helper Functions ───────────────────────────────────────────────────────────
 
@@ -15,19 +16,14 @@ def load_sp500_tickers():
     return table["Symbol"].tolist()
 
 @st.cache_data
-def get_stock_data(ticker, start_date="2020-01-01"):
+def get_stock_data(ticker, start_date="2020-01-01", end_date=None):
     try:
         # Fetch stock data using yfinance
-        df = yf.Ticker(ticker).history(start=start_date)
-
-        # Ensure all characters are properly encoded
-        df = df.applymap(lambda x: str(x) if isinstance(x, str) else x)
-
+        df = yf.Ticker(ticker).history(start=start_date, end=end_date)
         df["20EMA"] = df["Close"].ewm(span=20, adjust=False).mean()
         df["50EMA"] = df["Close"].ewm(span=50, adjust=False).mean()
         df["RSI"] = compute_rsi(df["Close"])
         df["MACD"], df["Signal"] = compute_macd(df["Close"])
-
         return df
     except Exception as e:
         st.error(f"Error fetching data for {ticker}: {str(e)}")
@@ -55,6 +51,12 @@ def check_buy_signal(df):
         (latest["MACD"] > latest["Signal"])
     )
 
+def get_stock_name(ticker):
+    try:
+        return yf.Ticker(ticker).info['longName']
+    except:
+        return ticker  # In case name is not available, return the ticker itself
+
 # ─── Streamlit UI ───────────────────────────────────────────────────────────────
 
 st.title("🔍 Momentum Screener: Top-N Stocks")
@@ -81,12 +83,13 @@ if st.button("🏁 Run Screener"):
             one_month_ago = df["Close"].iloc[-21]
             latest_price  = df["Close"].iloc[-1]
             ret           = (latest_price / one_month_ago) - 1
-            results.append((sym, ret, df))
+            stock_name = get_stock_name(sym)  # Get stock name
+            results.append((stock_name, sym, ret, df))
 
     # create DataFrame of results & pick top-N by return
     res_df = pd.DataFrame(
-        [(s, r) for s, r, _ in results],
-        columns=["Ticker", "1-Mo Return"]
+        [(name, sym, r) for name, sym, r, _ in results],
+        columns=["Stock Name", "Ticker", "1-Mo Return"]
     ).sort_values("1-Mo Return", ascending=False).reset_index(drop=True)
 
     st.subheader(f"Top {top_n} Momentum Stocks")
@@ -99,7 +102,7 @@ if st.button("🏁 Run Screener"):
         options=top_df["Ticker"].tolist()
     )
     if sel:
-        df_sel = next(df for s, _, df in results if s == sel)
+        df_sel = next(df for _, s, _, df in results if s == sel)
         st.markdown(f"### Detailed View: **{sel}**")
 
         # plot price + EMAs
@@ -126,37 +129,43 @@ if st.button("🏁 Run Screener"):
 
         st.pyplot(fig2)
 
-# ─── Individual Stock Search with Explanation ────────────────────────────────────
+# ─── Comparison of Previous vs Today ─────────────────────────────────────────────
 
 st.divider()
-st.subheader("🔎 Check Signal for Any Stock (with Explanation)")
+st.subheader("📊 Compare Previous Day vs Today")
 
-user_ticker = st.text_input("Enter stock ticker (e.g., MSFT):")
-if st.button("🔍 Check Ticker"):
-    if user_ticker:
-        try:
-            df = get_stock_data(user_ticker.upper(), start_date="2023-01-01")
-            latest = df.iloc[-1]
+# Let the user select the stock and dates for comparison
+ticker_to_compare = st.text_input("Enter Stock Ticker for Comparison (e.g., MSFT):")
 
-            ema_pass = latest["20EMA"] > latest["50EMA"]
-            rsi = latest["RSI"]
-            rsi_pass = 50 <= rsi <= 70
-            macd_pass = latest["MACD"] > latest["Signal"]
+# Use two date pickers for selecting comparison dates
+today_date = st.date_input("Select Today's Date", datetime.today())
+previous_date = st.date_input("Select Previous Date", datetime.today() - timedelta(days=1))
 
-            is_buy = ema_pass and rsi_pass and macd_pass
-            st.success(f"Buy Signal for {user_ticker.upper()}: {'✅ YES' if is_buy else '❌ NO'}")
+if ticker_to_compare and st.button("Compare Stocks"):
+    df_today = get_stock_data(ticker_to_compare.upper(), start_date=previous_date, end_date=today_date)
+    df_previous = get_stock_data(ticker_to_compare.upper(), start_date=today_date - timedelta(days=2), end_date=today_date - timedelta(days=1))
 
-            st.markdown("### 📋 Signal Breakdown")
-            st.markdown(f"- {'✅' if ema_pass else '❌'} 20EMA > 50EMA (20EMA = {latest['20EMA']:.2f}, 50EMA = {latest['50EMA']:.2f})")
-            st.markdown(f"- {'✅' if rsi_pass else '❌'} RSI = {rsi:.2f} (should be between 50 and 70)")
-            st.markdown(f"- {'✅' if macd_pass else '❌'} MACD = {latest['MACD']:.2f}, Signal = {latest['Signal']:.2f}")
+    if df_today.empty or df_previous.empty:
+        st.error("Couldn't fetch data for the selected dates.")
+    else:
+        # Compare data: Show percentage change for key metrics
+        price_today = df_today["Close"].iloc[-1]
+        price_previous = df_previous["Close"].iloc[-1]
 
-            fig, ax = plt.subplots()
-            ax.plot(df.index, df["Close"], label="Close")
-            ax.plot(df.index, df["20EMA"], label="20EMA", linestyle="--")
-            ax.plot(df.index, df["50EMA"], label="50EMA", linestyle="--")
-            ax.legend()
-            st.pyplot(fig)
+        price_change = (price_today - price_previous) / price_previous * 100
 
-        except Exception as e:
-            st.error(f"Couldn't fetch {user_ticker.upper()}: {e}")
+        st.markdown(f"### Price Change: **{price_change:.2f}%**")
+
+        # Plot the comparison for visuals
+        fig, ax = plt.subplots()
+        ax.plot(df_today.index, df_today["Close"], label="Today", color="blue")
+        ax.plot(df_previous.index, df_previous["Close"], label="Previous", color="orange")
+        ax.legend()
+        st.pyplot(fig)
+
+        # Additional Analysis (RSI, EMA, etc.)
+        st.markdown("### Additional Analysis:")
+        st.markdown(f"RSI for Today: {df_today['RSI'].iloc[-1]:.2f}")
+        st.markdown(f"RSI for Previous: {df_previous['RSI'].iloc[-1]:.2f}")
+        st.markdown(f"20EMA for Today: {df_today['20EMA'].iloc[-1]:.2f}")
+        st.markdown(f"50EMA for Today: {df_today['50EMA'].iloc[-1]:.2f}")
