@@ -140,7 +140,9 @@ if ticker_to_compare and st.button("Compare Stocks"):
         st.error("Couldn't fetch sufficient data for the selected dates.")
     else:
         st.markdown(f"### 📈 {ticker_to_compare.upper()} Analysis from {previous_date} to {today_date}")
+        df.index = pd.to_datetime(df.index)  # Ensure datetime index
         latest = df.loc[df.index <= pd.to_datetime(today_date)].iloc[-1]
+
         st.markdown(f"**Latest Close Price**: {latest['Close']:.2f}")
 
         buy_signal, reason = check_buy_signal(df)
